@@ -25,7 +25,9 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import zipfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from urllib.request import urlretrieve, Request, urlopen
 from urllib.error import URLError, HTTPError
@@ -34,6 +36,12 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 MANIFEST_PATH = SCRIPT_DIR / "tool-manifest.json"
 TOOLS_DIR = SCRIPT_DIR / "tools"
 DOWNLOAD_CACHE_DIR = SCRIPT_DIR / ".cache"
+
+
+class DownloadError(Exception):
+    """Raised when a download fails after all retries."""
+    pass
+
 
 # ── Platform detection ──────────────────────────────────────────────────────
 
@@ -77,34 +85,49 @@ def load_manifest() -> dict:
 
 # ── Download helpers ────────────────────────────────────────────────────────
 
-def download_file(url: str, dest: Path) -> Path:
-    """Download a file with progress reporting."""
+def download_file(url: str, dest: Path, retries: int = 3, show_progress: bool = True) -> Path:
+    """Download a file with progress reporting and retry logic.
+
+    Raises DownloadError if all retries are exhausted.
+    """
     dest.parent.mkdir(parents=True, exist_ok=True)
 
     if dest.exists():
-        print(f"  Using cached: {dest.name}")
+        if show_progress:
+            print(f"  Using cached: {dest.name}")
         return dest
 
-    print(f"  Downloading: {url}")
-    print(f"  Destination: {dest}")
+    if show_progress:
+        print(f"  Downloading: {url}")
+        print(f"  Destination: {dest}")
 
-    try:
-        def _progress(block_num, block_size, total_size):
-            if total_size > 0:
-                downloaded = block_num * block_size
-                pct = min(100, downloaded * 100 // total_size)
-                mb_down = downloaded / (1024 * 1024)
-                mb_total = total_size / (1024 * 1024)
-                print(f"\r  Progress: {pct:3d}% ({mb_down:.1f}/{mb_total:.1f} MB)", end="", flush=True)
+    for attempt in range(1, retries + 1):
+        try:
+            if show_progress:
+                def _progress(block_num, block_size, total_size):
+                    if total_size > 0:
+                        downloaded = block_num * block_size
+                        pct = min(100, downloaded * 100 // total_size)
+                        mb_down = downloaded / (1024 * 1024)
+                        mb_total = total_size / (1024 * 1024)
+                        print(f"\r  Progress: {pct:3d}% ({mb_down:.1f}/{mb_total:.1f} MB)", end="", flush=True)
 
-        urlretrieve(url, str(dest), reporthook=_progress)
-        print()  # newline after progress
-        return dest
-    except (URLError, HTTPError) as e:
-        print(f"\n  ERROR: Download failed: {e}", file=sys.stderr)
-        if dest.exists():
-            dest.unlink()
-        sys.exit(1)
+                urlretrieve(url, str(dest), reporthook=_progress)
+                print()  # newline after progress
+            else:
+                urlretrieve(url, str(dest))
+            return dest
+        except (URLError, HTTPError) as e:
+            if dest.exists():
+                dest.unlink()
+            if attempt < retries:
+                wait = 2 ** attempt
+                print(f"\n  Retry {attempt}/{retries} in {wait}s: {e}")
+                time.sleep(wait)
+            else:
+                raise DownloadError(
+                    f"Download failed after {retries} attempts: {e}"
+                ) from e
 
 
 def verify_sha256(file_path: Path, expected: str) -> bool:
@@ -131,6 +154,15 @@ def verify_sha256(file_path: Path, expected: str) -> bool:
 
 # ── Extraction helpers ──────────────────────────────────────────────────────
 
+def _safe_tar_extractall(tf: tarfile.TarFile, dest: Path):
+    """Extract tarball safely, using data filter on Python 3.12+."""
+    try:
+        tf.extractall(dest, filter="data")
+    except TypeError:
+        # Python < 3.12 doesn't support the filter parameter
+        tf.extractall(dest)
+
+
 def extract_archive(archive_path: Path, dest_dir: Path, fmt: str, strip: int = 0):
     """Extract an archive to dest_dir, optionally stripping leading path components."""
     print(f"  Extracting to: {dest_dir}")
@@ -152,7 +184,7 @@ def extract_archive(archive_path: Path, dest_dir: Path, fmt: str, strip: int = 0
                 "tar.bz2": "r:bz2",
             }[fmt]
             with tarfile.open(archive_path, mode) as tf:
-                tf.extractall(dest_dir)
+                _safe_tar_extractall(tf, dest_dir)
         else:
             print(f"  ERROR: Unknown archive format: {fmt}", file=sys.stderr)
             sys.exit(1)
@@ -170,7 +202,7 @@ def extract_archive(archive_path: Path, dest_dir: Path, fmt: str, strip: int = 0
                     "tar.bz2": "r:bz2",
                 }[fmt]
                 with tarfile.open(archive_path, mode) as tf:
-                    tf.extractall(tmpdir)
+                    _safe_tar_extractall(tf, tmpdir)
 
             # Find the stripped root
             stripped = tmpdir
@@ -266,7 +298,7 @@ def resolve_tool_name(name: str) -> str:
     return TOOL_ALIASES.get(name.lower(), name)
 
 
-def setup_tool(tool_name: str, tool_cfg: dict, plat: str, force: bool = False) -> bool:
+def setup_tool(tool_name: str, tool_cfg: dict, plat: str, cache_dir: Path, force: bool = False) -> bool:
     """Download and extract a single tool. Returns True on success."""
     print(f"\n{'='*60}")
     print(f"  Tool: {tool_name} v{tool_cfg['version']}")
@@ -292,10 +324,14 @@ def setup_tool(tool_name: str, tool_cfg: dict, plat: str, force: bool = False) -
 
     # Determine cache filename
     filename = url.rsplit("/", 1)[-1]
-    cache_path = DOWNLOAD_CACHE_DIR / filename
+    cache_path = cache_dir / filename
 
     # Download
-    download_file(url, cache_path)
+    try:
+        download_file(url, cache_path)
+    except DownloadError as e:
+        print(f"  ERROR: {e}", file=sys.stderr)
+        return False
 
     # Verify checksum
     if not verify_sha256(cache_path, sha256):
@@ -353,6 +389,83 @@ def print_env_info(plat: str, manifest: dict):
     print()
 
 
+def list_tools(manifest: dict, plat: str):
+    """List all available tools with their versions and installed status."""
+    print(f"\n{'='*60}")
+    print(f"  Available Tools (platform: {plat})")
+    print(f"{'='*60}")
+    print(f"  {'Tool':<25} {'Version':<15} {'Status':<15}")
+    print(f"  {'-'*25} {'-'*15} {'-'*15}")
+
+    for tool_name, tool_cfg in manifest["tools"].items():
+        version = tool_cfg["version"]
+        installed = get_installed_version(tool_name)
+        if installed == version:
+            status = "Installed"
+        elif installed:
+            status = f"Outdated ({installed})"
+        else:
+            status = "Not installed"
+
+        available = plat in tool_cfg.get("platforms", {})
+        if not available:
+            status = "N/A (no binary)"
+
+        print(f"  {tool_name:<25} {version:<15} {status:<15}")
+
+    print(f"\n  Aliases:")
+    for alias, target in sorted(TOOL_ALIASES.items()):
+        if alias != target:
+            print(f"    {alias} -> {target}")
+    print()
+
+
+def compute_checksums(manifest: dict, plat: str, cache_dir: Path):
+    """Download tools and compute SHA-256 checksums, updating the manifest."""
+    print(f"Computing checksums for platform: {plat}")
+    updated = False
+
+    for tool_name, tool_cfg in manifest["tools"].items():
+        if plat not in tool_cfg["platforms"]:
+            continue
+
+        plat_cfg = tool_cfg["platforms"][plat]
+        url = plat_cfg["url"]
+        filename = url.rsplit("/", 1)[-1]
+        cache_path = cache_dir / filename
+
+        print(f"\n  {tool_name}:")
+        try:
+            download_file(url, cache_path)
+        except DownloadError as e:
+            print(f"    ERROR: {e}")
+            continue
+
+        sha256 = hashlib.sha256()
+        with open(cache_path, "rb") as f:
+            for chunk in iter(lambda: f.read(8192), b""):
+                sha256.update(chunk)
+        checksum = sha256.hexdigest()
+
+        old = plat_cfg.get("sha256", "")
+        if old != checksum:
+            plat_cfg["sha256"] = checksum
+            print(f"    SHA-256: {checksum}")
+            if old:
+                print(f"    (was:    {old})")
+            updated = True
+        else:
+            print(f"    SHA-256 unchanged: {checksum[:16]}...")
+
+    if updated:
+        with open(MANIFEST_PATH, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, indent=2)
+            f.write("\n")
+        print(f"\nManifest updated: {MANIFEST_PATH}")
+    else:
+        print("\nNo changes to manifest.")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Download and set up portable embedded build tools."
@@ -382,6 +495,16 @@ def main():
         help="Remove all downloaded tools and cache",
     )
     parser.add_argument(
+        "--list",
+        action="store_true",
+        help="List available tools with versions and install status",
+    )
+    parser.add_argument(
+        "--compute-checksums",
+        action="store_true",
+        help="Download tools and compute SHA-256 checksums, updating the manifest",
+    )
+    parser.add_argument(
         "--cache-dir",
         type=Path,
         help="Override download cache directory",
@@ -395,12 +518,20 @@ def main():
     plat = args.platform or detect_platform()
     print(f"Platform: {plat}")
 
-    global DOWNLOAD_CACHE_DIR
-    if args.cache_dir:
-        DOWNLOAD_CACHE_DIR = args.cache_dir
+    cache_dir = args.cache_dir or DOWNLOAD_CACHE_DIR
 
     manifest = load_manifest()
     all_tools = manifest["tools"]
+
+    # --list: show tool info and exit
+    if args.list:
+        list_tools(manifest, plat)
+        return
+
+    # --compute-checksums: download + hash + update manifest
+    if args.compute_checksums:
+        compute_checksums(manifest, plat, cache_dir)
+        return
 
     # Determine which tools to set up
     if args.tools:
@@ -413,10 +544,66 @@ def main():
         selected = list(all_tools.keys())
         print(f"Installing all tools: {', '.join(selected)}")
 
-    results = {}
-    for tool_name in selected:
-        ok = setup_tool(tool_name, all_tools[tool_name], plat, force=args.force)
-        results[tool_name] = ok
+    if args.verify:
+        # --verify: download and verify checksums only
+        print("\nVerify mode: downloading and checking checksums only.\n")
+        results = {}
+        for tool_name in selected:
+            tool_cfg = all_tools[tool_name]
+            if plat not in tool_cfg["platforms"]:
+                print(f"  {tool_name}: SKIP (no binary for {plat})")
+                results[tool_name] = True
+                continue
+            plat_cfg = tool_cfg["platforms"][plat]
+            url = plat_cfg["url"]
+            sha256 = plat_cfg.get("sha256", "")
+            filename = url.rsplit("/", 1)[-1]
+            cache_path = cache_dir / filename
+            print(f"  {tool_name}:")
+            try:
+                download_file(url, cache_path)
+                ok = verify_sha256(cache_path, sha256)
+                results[tool_name] = ok
+            except DownloadError as e:
+                print(f"    ERROR: {e}")
+                results[tool_name] = False
+    else:
+        # Normal mode: parallel download to warm cache, then sequential extract
+        to_download = []
+        for tool_name in selected:
+            tool_cfg = all_tools[tool_name]
+            installed = get_installed_version(tool_name)
+            if installed == tool_cfg["version"] and not args.force:
+                continue
+            if plat not in tool_cfg["platforms"]:
+                continue
+            plat_cfg = tool_cfg["platforms"][plat]
+            url = plat_cfg["url"]
+            filename = url.rsplit("/", 1)[-1]
+            cache_path = cache_dir / filename
+            if not cache_path.exists():
+                to_download.append((tool_name, url, cache_path))
+
+        if to_download:
+            print(f"\nDownloading {len(to_download)} archive(s) in parallel...")
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                futures = {}
+                for tool_name, url, cache_path in to_download:
+                    future = executor.submit(download_file, url, cache_path, 3, False)
+                    futures[future] = tool_name
+                for future in as_completed(futures):
+                    tname = futures[future]
+                    try:
+                        future.result()
+                        print(f"  Downloaded: {tname}")
+                    except DownloadError as e:
+                        print(f"  FAILED: {tname}: {e}")
+
+        # Extract sequentially (downloads are cached from parallel phase)
+        results = {}
+        for tool_name in selected:
+            ok = setup_tool(tool_name, all_tools[tool_name], plat, cache_dir, force=args.force)
+            results[tool_name] = ok
 
     # Summary
     print(f"\n{'='*60}")

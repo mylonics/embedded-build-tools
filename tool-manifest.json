@@ -113,7 +113,7 @@
       }
     },
     "python": {
-      "version": "3.12.6-1",
+      "version": "3.12.6+20240909",
       "description": "Portable Python (python-build-standalone / xPack compatible, GDB-compatible)",
       "repo": "indygreg/python-build-standalone",
       "platforms": {

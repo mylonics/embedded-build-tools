@@ -79,9 +79,9 @@ def get_latest_python_release(repo: str) -> dict | None:
     for release in releases:
         tag = release.get("tag_name", "")
         assets = release.get("assets", [])
-        # Check if this release has Python 3.12 install_only_stripped builds
+        # Check if this release has Python 3.12 install_only builds
         has_312 = any(
-            "cpython-3.12" in a["name"] and "install_only_stripped" in a["name"]
+            "cpython-3.12" in a["name"] and "install_only.tar.gz" in a["name"]
             for a in assets
         )
         if has_312:
@@ -100,7 +100,7 @@ def extract_python_version_from_assets(assets: list[dict]) -> str | None:
     for asset in assets:
         m = re.search(r"cpython-(\d+\.\d+\.\d+)\+(\d+)", asset["name"])
         if m:
-            return f"{m.group(1)}-{m.group(2)[:1]}"  # e.g., "3.12.6-2"
+            return f"{m.group(1)}+{m.group(2)}"  # e.g., "3.12.6+20240909"
     return None
 
 

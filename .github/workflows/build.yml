@@ -7,6 +7,7 @@ on:
       - 'tool-manifest.json'
       - 'setup.py'
       - 'scripts/**'
+      - 'installers/**'
       - '.github/workflows/build.yml'
   pull_request:
     branches: [main]
@@ -99,14 +100,15 @@ jobs:
           ARTIFACT_NAME="embedded-build-tools-${{ matrix.platform }}"
           if [[ "${{ matrix.platform }}" == win32-* ]]; then
             # Zip for Windows (preserves nothing special, but Windows doesn't need +x)
-            7z a "${ARTIFACT_NAME}.zip" tools/ setup.py env.bat env.sh scripts/ integrations/ tool-manifest.json
+            7z a "${ARTIFACT_NAME}.zip" tools/ setup.py env.bat env.sh env.ps1 scripts/ integrations/ installers/ tool-manifest.json
           else
             # Ensure execute permissions before archiving (setup.py already does this,
             # but be explicit for any files that might have been missed)
             find tools/ -type f -path '*/bin/*' -exec chmod a+x {} +
+            chmod a+x installers/install.sh
             # tar.gz for Linux/macOS to preserve execute permissions
             tar czf "${ARTIFACT_NAME}.tar.gz" \
-              tools/ setup.py env.bat env.sh scripts/ integrations/ tool-manifest.json
+              tools/ setup.py env.bat env.sh env.ps1 scripts/ integrations/ installers/ tool-manifest.json
           fi
 
       - name: Upload artifact
@@ -176,6 +178,28 @@ jobs:
           | Linux arm64 | {bt}embedded-build-tools-linux-arm64.tar.gz{bt} |
           | macOS x64 (Intel) | {bt}embedded-build-tools-darwin-x64.tar.gz{bt} |
           | macOS arm64 (Apple Silicon) | {bt}embedded-build-tools-darwin-arm64.tar.gz{bt} |
+
+          ## Quick Install
+
+          **Bash (Linux / macOS):**
+          {bt}{bt}{bt}bash
+          curl -fsSL https://github.com/mylonics/embedded-build-tools/releases/latest/download/install.sh | bash
+          {bt}{bt}{bt}
+
+          **Python (any platform):**
+          {bt}{bt}{bt}bash
+          curl -fsSL -o install.py https://github.com/mylonics/embedded-build-tools/releases/latest/download/install.py && python install.py
+          {bt}{bt}{bt}
+
+          **Node.js:**
+          {bt}{bt}{bt}bash
+          curl -fsSL -o install.js https://github.com/mylonics/embedded-build-tools/releases/latest/download/install.js && node install.js
+          {bt}{bt}{bt}
+
+          **Windows (cmd):**
+          {bt}{bt}{bt}bat
+          powershell -Command "Invoke-WebRequest -Uri https://github.com/mylonics/embedded-build-tools/releases/latest/download/install.bat -OutFile install.bat" && install.bat
+          {bt}{bt}{bt}
           '''
 
           import textwrap
@@ -196,3 +220,7 @@ jobs:
           files: |
             release-artifacts/**/*
             tool-manifest.json
+            installers/install.sh
+            installers/install.bat
+            installers/install.py
+            installers/install.js

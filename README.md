@@ -23,9 +23,39 @@ python setup.py
 
 This downloads and extracts all tools into the `tools/` directory (~1.5 GB).
 
-### Option B: Download a pre-built release artifact
+### Option B: One-line installer
 
-Pre-built bundles with all tools included are available on the [Releases](https://github.com/mylonics/embedded-build-tools/releases) page. Each release has a platform-specific archive:
+Single-command installers that auto-detect your platform and download the correct release:
+
+**Bash (Linux / macOS):**
+
+```bash
+curl -fsSL https://github.com/mylonics/embedded-build-tools/releases/latest/download/install.sh | bash
+```
+
+**Python (any platform):**
+
+```bash
+curl -fsSL -o install.py https://github.com/mylonics/embedded-build-tools/releases/latest/download/install.py && python install.py
+```
+
+**Node.js:**
+
+```bash
+curl -fsSL -o install.js https://github.com/mylonics/embedded-build-tools/releases/latest/download/install.js && node install.js
+```
+
+**Windows (cmd):**
+
+```bat
+powershell -Command "Invoke-WebRequest -Uri https://github.com/mylonics/embedded-build-tools/releases/latest/download/install.bat -OutFile install.bat" && install.bat
+```
+
+All installers support `--version <tag>` to pin a specific release and `--dest <dir>` to choose the install location.
+
+### Option C: Manual download
+
+Pre-built bundles are available on the [Releases](https://github.com/mylonics/embedded-build-tools/releases) page:
 
 | Platform | Artifact |
 |----------|----------|
@@ -35,31 +65,6 @@ Pre-built bundles with all tools included are available on the [Releases](https:
 | macOS x64 (Intel) | `embedded-build-tools-darwin-x64.tar.gz` |
 | macOS arm64 (Apple Silicon) | `embedded-build-tools-darwin-arm64.tar.gz` |
 
-**Windows:**
-
-```powershell
-# Download
-Invoke-WebRequest -Uri "https://github.com/mylonics/embedded-build-tools/releases/latest/download/embedded-build-tools-win32-x64.zip" -OutFile embedded-build-tools.zip
-
-# Extract
-Expand-Archive embedded-build-tools.zip -DestinationPath embedded-build-tools
-```
-
-**Linux / macOS:**
-
-```bash
-# Set your platform: linux-x64, linux-arm64, darwin-x64, or darwin-arm64
-PLATFORM="linux-x64"
-
-# Download
-curl -L -o embedded-build-tools.tar.gz \
-  "https://github.com/mylonics/embedded-build-tools/releases/latest/download/embedded-build-tools-${PLATFORM}.tar.gz"
-
-# Extract (preserves execute permissions)
-mkdir -p embedded-build-tools
-tar xzf embedded-build-tools.tar.gz -C embedded-build-tools
-```
-
 **macOS only — remove quarantine attribute:**
 
 macOS Gatekeeper blocks unsigned binaries downloaded from the internet. After extracting, run:
@@ -68,11 +73,9 @@ macOS Gatekeeper blocks unsigned binaries downloaded from the internet. After ex
 xattr -cr embedded-build-tools/tools
 ```
 
-This is required once after download. Without it you'll see *"cannot be opened because the developer cannot be verified"* errors. If you use `python setup.py` (Option A) instead, this is handled automatically.
+This is required once after download. The one-line installers and `python setup.py` handle this automatically.
 
-> **Note:** Linux/macOS artifacts are `.tar.gz` to preserve Unix execute permissions on the binaries. Windows artifacts are `.zip`.
-
-### 3. Use the tools
+### Use the tools
 
 **Set up environment variables:**
 
@@ -80,8 +83,11 @@ This is required once after download. Without it you'll see *"cannot be opened b
 # Linux / macOS
 source env.sh
 
-# Windows
+# Windows (cmd)
 call env.bat
+
+# Windows (PowerShell)
+. .\env.ps1
 ```
 
 **Or use the Python helper:**
@@ -110,35 +116,35 @@ ninja = tc.ninja_path()
 
 GDB is included with the GCC toolchain as `arm-none-eabi-gdb`.
 
-## Selective Installation
-
-Install only specific tools:
+## setup.py Reference
 
 ```bash
-python setup.py --tools gcc cmake
-python setup.py --tools ninja python
+python setup.py                          # download all tools for current platform
+python setup.py --tools gcc cmake        # download specific tools
+python setup.py --platform linux-x64     # override platform detection
+python setup.py --list                   # show available tools, versions, and install status
+python setup.py --verify                 # download and verify checksums without extracting
+python setup.py --compute-checksums      # download + compute SHA-256, update manifest
+python setup.py --force                  # force reinstall even if version matches
+python setup.py --clean                  # remove all downloaded tools and cache
 ```
 
-Aliases: `gcc` → `arm-none-eabi-gcc`, `ninja` → `ninja-build`
+Tool aliases: `gcc` → `arm-none-eabi-gcc`, `arm-gcc` → `arm-none-eabi-gcc`, `ninja` → `ninja-build`, `gdb` → `arm-none-eabi-gcc`
 
 ## Integration Guide
 
 ### Electron / Desktop Apps
 
 ```javascript
-const { execSync } = require('child_process');
-const path = require('path');
+// CommonJS
+const { EmbeddedToolchain } = require('./embedded-build-tools/integrations/node_helper');
 
-// Point to the embedded-build-tools directory
-const toolsRoot = path.join(__dirname, 'embedded-build-tools');
+// ESM
+import { EmbeddedToolchain } from './embedded-build-tools/integrations/node_helper.mjs';
 
-// Get environment JSON
-const envJson = execSync(`python scripts/env_helper.py --json`, { cwd: toolsRoot });
-const toolInfo = JSON.parse(envJson);
-
-// Use paths directly
-const gccPath = toolInfo.paths.gcc;
-const cmakePath = toolInfo.paths.cmake;
+const tc = new EmbeddedToolchain('/path/to/embedded-build-tools');
+const gcc = tc.gccPath();
+const env = tc.getEnv();  // Use with child_process.spawn({ env })
 ```
 
 ### CMake Projects
@@ -194,15 +200,21 @@ cd tools/embedded && python setup.py
 
 ```
 embedded-build-tools/
-├── tool-manifest.json      # Pinned versions & download URLs
+├── tool-manifest.json          # Pinned versions & download URLs
 ├── setup.py                    # Main download/extract script (stdlib only)
-├── env.bat / env.sh            # Shell environment scripts
+├── env.bat / env.sh / env.ps1  # Shell environment scripts
 ├── scripts/
 │   ├── check_updates.py        # Update checker (used by GitHub Action)
 │   └── env_helper.py           # Integration helper (Python API + CLI)
 ├── integrations/
 │   ├── arm-none-eabi.cmake     # CMake toolchain file
-│   └── node_helper.js          # Node.js/Electron integration
+│   ├── node_helper.js          # Node.js/Electron integration (CJS)
+│   └── node_helper.mjs         # Node.js/Electron integration (ESM)
+├── installers/
+│   ├── install.sh              # One-line installer (bash)
+│   ├── install.bat             # One-line installer (Windows cmd)
+│   ├── install.py              # One-line installer (Python, stdlib only)
+│   └── install.js              # One-line installer (Node.js, zero deps)
 ├── .github/workflows/
 │   ├── check-updates.yml       # Weekly update checker → opens PRs
 │   └── build.yml               # Validate tools on all platforms
