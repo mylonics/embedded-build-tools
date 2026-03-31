@@ -101,9 +101,11 @@ jobs:
             # Zip for Windows (preserves nothing special, but Windows doesn't need +x)
             7z a "${ARTIFACT_NAME}.zip" tools/ setup.py env.bat env.sh scripts/ integrations/ tool-manifest.json
           else
+            # Ensure execute permissions before archiving (setup.py already does this,
+            # but be explicit for any files that might have been missed)
+            find tools/ -type f -path '*/bin/*' -exec chmod a+x {} +
             # tar.gz for Linux/macOS to preserve execute permissions
             tar czf "${ARTIFACT_NAME}.tar.gz" \
-              --mode='a+x' \
               tools/ setup.py env.bat env.sh scripts/ integrations/ tool-manifest.json
           fi
 
