@@ -36,11 +36,11 @@ PLATFORM_SUFFIXES = {
 
 # python-build-standalone uses different naming
 PYTHON_PLATFORM_MAP = {
-    "win32-x64": "x86_64-pc-windows-msvc-install_only_stripped.tar.gz",
-    "linux-x64": "x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
-    "linux-arm64": "aarch64-unknown-linux-gnu-install_only_stripped.tar.gz",
-    "darwin-x64": "x86_64-apple-darwin-install_only_stripped.tar.gz",
-    "darwin-arm64": "aarch64-apple-darwin-install_only_stripped.tar.gz",
+    "win32-x64": "x86_64-pc-windows-msvc-install_only.tar.gz",
+    "linux-x64": "x86_64-unknown-linux-gnu-install_only.tar.gz",
+    "linux-arm64": "aarch64-unknown-linux-gnu-install_only.tar.gz",
+    "darwin-x64": "x86_64-apple-darwin-install_only.tar.gz",
+    "darwin-arm64": "aarch64-apple-darwin-install_only.tar.gz",
 }
 
 

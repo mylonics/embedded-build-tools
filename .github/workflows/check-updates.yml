@@ -44,7 +44,9 @@ jobs:
             HAS_UPDATES=$(python3 -c "import json; d=json.load(open('updates.json')); print('true' if d.get('has_updates') else 'false')")
             echo "has_updates=$HAS_UPDATES" >> "$GITHUB_OUTPUT"
             SUMMARY=$(python3 -c "import json; d=json.load(open('updates.json')); print(d.get('summary','No updates'))")
-            echo "summary=$SUMMARY" >> "$GITHUB_OUTPUT"
+            echo "summary<<EOF" >> "$GITHUB_OUTPUT"
+            echo "$SUMMARY" >> "$GITHUB_OUTPUT"
+            echo "EOF" >> "$GITHUB_OUTPUT"
           else
             echo "has_updates=false" >> "$GITHUB_OUTPUT"
           fi
