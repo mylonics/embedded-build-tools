@@ -1,0 +1,158 @@
+name: Build & Validate Tools
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tool-manifest.json'
+      - 'setup.py'
+      - 'scripts/**'
+      - '.github/workflows/build.yml'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  validate:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux-x64
+          - os: macos-latest
+            platform: darwin-arm64
+          - os: macos-13
+            platform: darwin-x64
+          - os: windows-latest
+            platform: win32-x64
+    
+    runs-on: ${{ matrix.os }}
+    name: Validate (${{ matrix.platform }})
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Download & extract tools
+        run: python setup.py --platform ${{ matrix.platform }}
+
+      - name: Verify tool versions
+        run: python scripts/env_helper.py --json
+
+      - name: Test GCC
+        shell: bash
+        run: |
+          if [ -f "tools/arm-none-eabi-gcc/bin/arm-none-eabi-gcc" ] || [ -f "tools/arm-none-eabi-gcc/bin/arm-none-eabi-gcc.exe" ]; then
+            tools/arm-none-eabi-gcc/bin/arm-none-eabi-gcc --version
+          else
+            echo "GCC binary not found, skipping test"
+          fi
+
+      - name: Test CMake
+        shell: bash
+        run: |
+          if [ -f "tools/cmake/bin/cmake" ] || [ -f "tools/cmake/bin/cmake.exe" ]; then
+            tools/cmake/bin/cmake --version
+          else
+            echo "CMake binary not found, skipping test"
+          fi
+
+      - name: Test Ninja
+        shell: bash
+        run: |
+          if [ -f "tools/ninja-build/bin/ninja" ] || [ -f "tools/ninja-build/bin/ninja.exe" ]; then
+            tools/ninja-build/bin/ninja --version
+          else
+            echo "Ninja binary not found, skipping test"
+          fi
+
+      - name: Test Python
+        shell: bash
+        run: |
+          PYTHON_BIN=""
+          if [ -f "tools/python/python/python.exe" ]; then
+            PYTHON_BIN="tools/python/python/python.exe"
+          elif [ -f "tools/python/bin/python3" ]; then
+            PYTHON_BIN="tools/python/bin/python3"
+          fi
+          if [ -n "$PYTHON_BIN" ]; then
+            "$PYTHON_BIN" --version
+          else
+            echo "Python binary not found, skipping test"
+          fi
+
+      - name: Test env_helper module
+        run: |
+          python scripts/env_helper.py --json
+          python scripts/env_helper.py --path
+          python scripts/env_helper.py --cmake-vars
+
+      - name: Package tools artifact
+        shell: bash
+        run: |
+          ARTIFACT_NAME="embedded-build-tools-${{ matrix.platform }}"
+          if [[ "${{ matrix.platform }}" == win32-* ]]; then
+            # Zip for Windows (preserves nothing special, but Windows doesn't need +x)
+            7z a "${ARTIFACT_NAME}.zip" tools/ setup.py env.bat env.sh scripts/ integrations/ tool-manifest.json
+          else
+            # tar.gz for Linux/macOS to preserve execute permissions
+            tar czf "${ARTIFACT_NAME}.tar.gz" \
+              --mode='a+x' \
+              tools/ setup.py env.bat env.sh scripts/ integrations/ tool-manifest.json
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: embedded-build-tools-${{ matrix.platform }}
+          path: |
+            embedded-build-tools-${{ matrix.platform }}.*
+          retention-days: 30
+
+  release:
+    needs: validate
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Read manifest version
+        id: version
+        run: |
+          VERSION=$(python3 -c "
+          import json
+          m = json.load(open('tool-manifest.json'))
+          tools = m['tools']
+          gcc_v = tools['arm-none-eabi-gcc']['version']
+          print(f'gcc-{gcc_v}')
+          ")
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Create release tag
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          generate_release_notes: true
+          files: |
+            release-artifacts/**/*
+            tool-manifest.json

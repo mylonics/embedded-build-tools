@@ -1,0 +1,24 @@
+# Downloaded tools (large binaries)
+tools/
+
+# Download cache
+.cache/
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# IDE
+.vscode/settings.json
+.idea/
+
+# Temp files
+*.tmp
+*.bak
+updates.json
