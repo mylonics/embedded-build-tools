@@ -143,9 +143,10 @@ jobs:
       - name: Generate release tag and notes
         id: version
         run: |
-          python3 -c "
+          python3 << 'PYEOF'
           import json
           import os
+          import textwrap
           from datetime import datetime, timezone
 
           m = json.load(open('tool-manifest.json'))
@@ -155,12 +156,12 @@ jobs:
           ninja_v = tools['ninja-build']['version']
           python_v = tools['python']['version']
 
-          # Date-based tag so any tool update produces a new unique release
           today = datetime.now(timezone.utc).strftime('%Y.%m.%d')
           tag = f'v{today}'
 
           bt = chr(96)  # backtick
-          body = f'''## Included Tools
+          body = textwrap.dedent(f"""\
+          ## Included Tools
 
           | Tool | Version |
           |------|---------|
@@ -200,17 +201,14 @@ jobs:
           {bt}{bt}{bt}bat
           powershell -Command "Invoke-WebRequest -Uri https://github.com/mylonics/embedded-build-tools/releases/latest/download/install.bat -OutFile install.bat" && install.bat
           {bt}{bt}{bt}
-          '''
-
-          import textwrap
-          body = textwrap.dedent(body)
+          """)
 
           with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
               f.write(f'tag={tag}\n')
 
           with open('release-body.md', 'w') as f:
               f.write(body)
-          "
+          PYEOF
 
       - name: Create release tag
         uses: softprops/action-gh-release@v2
