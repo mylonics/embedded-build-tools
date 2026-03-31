@@ -22,7 +22,7 @@ jobs:
             platform: linux-x64
           - os: macos-latest
             platform: darwin-arm64
-          - os: macos-13
+          - os: macos-15-intel
             platform: darwin-x64
           - os: windows-latest
             platform: win32-x64
@@ -32,10 +32,10 @@ jobs:
     
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
@@ -110,7 +110,7 @@ jobs:
           fi
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: embedded-build-tools-${{ matrix.platform }}
           path: |
@@ -126,35 +126,67 @@ jobs:
     
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: release-artifacts
 
       - name: Read manifest version
         id: version
         run: |
-          VERSION=$(python3 -c "
+          python3 -c "
           import json
+          import os
+          import textwrap
+
           m = json.load(open('tool-manifest.json'))
           tools = m['tools']
           gcc_v = tools['arm-none-eabi-gcc']['version']
-          print(f'gcc-{gcc_v}')
-          ")
-          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+          cmake_v = tools['cmake']['version']
+          ninja_v = tools['ninja-build']['version']
+          python_v = tools['python']['version']
+
+          tag = f'vgcc-{gcc_v}'
+          body = f'''## Included Tool Versions
+
+          | Tool | Version |
+          |------|---------|
+          | ARM GCC (`arm-none-eabi-gcc`) | {gcc_v} |
+          | CMake | {cmake_v} |
+          | Ninja Build | {ninja_v} |
+          | Python | {python_v} |
+
+          ## Platform Artifacts
+
+          | Platform | Artifact |
+          |----------|----------|
+          | Windows x64 | \`embedded-build-tools-win32-x64.zip\` |
+          | Linux x64 | \`embedded-build-tools-linux-x64.tar.gz\` |
+          | Linux arm64 | \`embedded-build-tools-linux-arm64.tar.gz\` |
+          | macOS x64 (Intel) | \`embedded-build-tools-darwin-x64.tar.gz\` |
+          | macOS arm64 (Apple Silicon) | \`embedded-build-tools-darwin-arm64.tar.gz\` |
+          '''
+          body = textwrap.dedent(body)
+
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f'tag={tag}\n')
+
+          with open('release-body.md', 'w') as f:
+              f.write(body)
+          "
 
       - name: Create release tag
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
-          generate_release_notes: true
+          body_path: release-body.md
           files: |
             release-artifacts/**/*
             tool-manifest.json
