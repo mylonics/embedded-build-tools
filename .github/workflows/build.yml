@@ -138,13 +138,13 @@ jobs:
         with:
           path: release-artifacts
 
-      - name: Read manifest version
+      - name: Generate release tag and notes
         id: version
         run: |
           python3 -c "
           import json
           import os
-          import textwrap
+          from datetime import datetime, timezone
 
           m = json.load(open('tool-manifest.json'))
           tools = m['tools']
@@ -153,12 +153,16 @@ jobs:
           ninja_v = tools['ninja-build']['version']
           python_v = tools['python']['version']
 
-          tag = f'vgcc-{gcc_v}'
-          body = f'''## Included Tool Versions
+          # Date-based tag so any tool update produces a new unique release
+          today = datetime.now(timezone.utc).strftime('%Y.%m.%d')
+          tag = f'v{today}'
+
+          bt = chr(96)  # backtick
+          body = f'''## Included Tools
 
           | Tool | Version |
           |------|---------|
-          | ARM GCC (`arm-none-eabi-gcc`) | {gcc_v} |
+          | ARM GCC | {gcc_v} |
           | CMake | {cmake_v} |
           | Ninja Build | {ninja_v} |
           | Python | {python_v} |
@@ -167,12 +171,14 @@ jobs:
 
           | Platform | Artifact |
           |----------|----------|
-          | Windows x64 | \`embedded-build-tools-win32-x64.zip\` |
-          | Linux x64 | \`embedded-build-tools-linux-x64.tar.gz\` |
-          | Linux arm64 | \`embedded-build-tools-linux-arm64.tar.gz\` |
-          | macOS x64 (Intel) | \`embedded-build-tools-darwin-x64.tar.gz\` |
-          | macOS arm64 (Apple Silicon) | \`embedded-build-tools-darwin-arm64.tar.gz\` |
+          | Windows x64 | {bt}embedded-build-tools-win32-x64.zip{bt} |
+          | Linux x64 | {bt}embedded-build-tools-linux-x64.tar.gz{bt} |
+          | Linux arm64 | {bt}embedded-build-tools-linux-arm64.tar.gz{bt} |
+          | macOS x64 (Intel) | {bt}embedded-build-tools-darwin-x64.tar.gz{bt} |
+          | macOS arm64 (Apple Silicon) | {bt}embedded-build-tools-darwin-arm64.tar.gz{bt} |
           '''
+
+          import textwrap
           body = textwrap.dedent(body)
 
           with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
