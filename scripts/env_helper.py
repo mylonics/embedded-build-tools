@@ -281,7 +281,7 @@ def main():
         print(f"Versions: {json.dumps(info['versions'], indent=2)}")
         print(f"\nTool Paths:")
         for name, path in info["paths"].items():
-            status = "✓" if path else "✗ (not installed)"
+            status = "OK" if path else "MISSING (not installed)"
             print(f"  {name:10s}: {path or status}")
         print(f"\nPATH: {info['path_string']}")
 

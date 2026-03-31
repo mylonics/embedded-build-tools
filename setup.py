@@ -309,7 +309,7 @@ def setup_tool(tool_name: str, tool_cfg: dict, plat: str, force: bool = False) -
     # Write version stamp
     write_version_stamp(tool_name, tool_cfg["version"])
 
-    print(f"  ✓ {tool_name} v{tool_cfg['version']} installed successfully.")
+    print(f"  OK: {tool_name} v{tool_cfg['version']} installed successfully.")
     return True
 
 
