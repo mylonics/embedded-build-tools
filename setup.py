@@ -365,28 +365,130 @@ def print_env_info(plat: str, manifest: dict):
     print(f"\n{'='*60}")
     print("  Environment Setup")
     print(f"{'='*60}")
-    
-    bin_paths = []
-    for tool_name, tool_cfg in manifest["tools"].items():
-        tool_dir = TOOLS_DIR / tool_name
-        if not tool_dir.exists():
-            continue
-        # Common bin subdirectory
-        bin_dir = tool_dir / "bin"
-        if bin_dir.exists():
-            bin_paths.append(str(bin_dir))
-        # Python has a different layout on Windows
-        if tool_name == "python" and plat.startswith("win32"):
-            python_dir = tool_dir / "python"
-            if python_dir.exists():
-                bin_paths.append(str(python_dir))
 
-    if bin_paths:
-        sep = ";" if plat.startswith("win32") else ":"
-        path_str = sep.join(bin_paths)
-        print(f"\n  Add to PATH:\n    {path_str}")
-    
+    env_sh = SCRIPT_DIR / "env.sh"
+    env_bat = SCRIPT_DIR / "env.bat"
+    env_ps1 = SCRIPT_DIR / "env.ps1"
+
+    if plat.startswith("win32"):
+        print(f"\n  To activate tools for the current session:")
+        print(f"    cmd:        call {env_bat}")
+        print(f"    PowerShell: . {env_ps1}")
+        print(f"\n  To add tools permanently to your PATH, run:")
+        print(f"    python setup.py --add-to-path")
+    else:
+        print(f"\n  To activate tools for the current session:")
+        print(f"    source {env_sh}")
+        print(f"\n  To add tools permanently to your PATH, run:")
+        print(f"    python setup.py --add-to-path")
+
     print()
+
+
+def add_to_path(plat: str):
+    """Permanently add tools to the system PATH."""
+    if plat.startswith("win32"):
+        _add_to_path_windows()
+    else:
+        _add_to_path_unix()
+
+
+def _add_to_path_unix():
+    """Add 'source env.sh' to common shell RC files on Linux/macOS."""
+    env_sh = SCRIPT_DIR / "env.sh"
+    source_line = f'\n# Embedded Build Tools\nsource "{env_sh}"\n'
+
+    rc_files = []
+    home = Path.home()
+    for name in (".bashrc", ".bash_profile", ".zshrc", ".profile"):
+        rc = home / name
+        if rc.exists():
+            rc_files.append(rc)
+
+    # If none exist yet, default to .bashrc
+    if not rc_files:
+        rc_files = [home / ".bashrc"]
+
+    added_to = []
+    for rc in rc_files:
+        try:
+            content = rc.read_text(encoding="utf-8")
+        except OSError:
+            content = ""
+        if str(env_sh) in content:
+            print(f"  Already configured: {rc}")
+            continue
+        try:
+            with open(rc, "a", encoding="utf-8") as f:
+                f.write(source_line)
+            added_to.append(rc)
+            print(f"  Added to: {rc}")
+        except OSError as e:
+            print(f"  WARNING: Could not write to {rc}: {e}", file=sys.stderr)
+
+    if added_to:
+        print(f"\n  Tools will be available in new shell sessions.")
+        print(f"  To apply immediately in this session, run:")
+        print(f"    source {env_sh}")
+    else:
+        print(f"\n  No changes made (already configured in all detected RC files).")
+
+
+def _add_to_path_windows():
+    """Add tool bin directories to the Windows user PATH via setx."""
+    bin_dirs = []
+    for tool_name in ["arm-none-eabi-gcc", "cmake", "ninja-build"]:
+        d = TOOLS_DIR / tool_name / "bin"
+        if d.exists():
+            bin_dirs.append(str(d))
+
+    # Python on Windows lives in tools/python/python
+    python_dir = TOOLS_DIR / "python" / "python"
+    if python_dir.exists():
+        bin_dirs.append(str(python_dir))
+    else:
+        python_bin = TOOLS_DIR / "python" / "bin"
+        if python_bin.exists():
+            bin_dirs.append(str(python_bin))
+
+    if not bin_dirs:
+        print("  No tool directories found. Run setup.py without --add-to-path first.")
+        return
+
+    # Read current user PATH
+    try:
+        result = subprocess.run(
+            ["powershell", "-Command",
+             "[System.Environment]::GetEnvironmentVariable('PATH','User')"],
+            capture_output=True, text=True, check=True,
+        )
+        current_path = result.stdout.strip()
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        current_path = ""
+
+    existing_dirs = set(current_path.split(";")) if current_path else set()
+    new_dirs = [d for d in bin_dirs if d not in existing_dirs]
+
+    if not new_dirs:
+        print("  Tool directories are already in your user PATH.")
+        return
+
+    new_path = ";".join(list(existing_dirs) + new_dirs).strip(";")
+    try:
+        subprocess.run(
+            ["powershell", "-Command",
+             f"[System.Environment]::SetEnvironmentVariable('PATH','{new_path}','User')"],
+            check=True,
+        )
+        print(f"  Added to user PATH:")
+        for d in new_dirs:
+            print(f"    {d}")
+        print(f"\n  Open a new Command Prompt or PowerShell window for the changes to take effect.")
+    except (FileNotFoundError, subprocess.CalledProcessError) as e:
+        print(f"  ERROR: Could not update PATH: {e}", file=sys.stderr)
+        print(f"  Add these directories to your PATH manually:", file=sys.stderr)
+        for d in new_dirs:
+            print(f"    {d}", file=sys.stderr)
 
 
 def list_tools(manifest: dict, plat: str):
@@ -509,6 +611,15 @@ def main():
         type=Path,
         help="Override download cache directory",
     )
+    parser.add_argument(
+        "--add-to-path",
+        action="store_true",
+        help=(
+            "Permanently add tool directories to the system PATH. "
+            "On Linux/macOS: appends 'source env.sh' to shell RC files (~/.bashrc, ~/.zshrc, etc.). "
+            "On Windows: updates the user PATH environment variable."
+        ),
+    )
     args = parser.parse_args()
 
     if args.clean:
@@ -517,6 +628,11 @@ def main():
 
     plat = args.platform or detect_platform()
     print(f"Platform: {plat}")
+
+    # --add-to-path: update persistent PATH and exit
+    if args.add_to_path:
+        add_to_path(plat)
+        return
 
     cache_dir = args.cache_dir or DOWNLOAD_CACHE_DIR
 

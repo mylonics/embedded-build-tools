@@ -68,23 +68,22 @@ def get_latest_xpack_release(repo: str) -> dict | None:
     return data
 
 
-def get_latest_python_release(repo: str) -> dict | None:
-    """Get the latest release from python-build-standalone."""
+def get_latest_python_release(repo: str, target_minor: str = "3.12") -> dict | None:
+    """Get the latest release from python-build-standalone for a given Python major.minor."""
     url = f"https://api.github.com/repos/{repo}/releases?per_page=10"
     releases = github_api(url)
     if not releases:
         return None
     
-    # Find the latest release that has cpython-3.12.x builds
+    # Find the latest release that has cpython-{target_minor}.x install_only builds
+    prefix = f"cpython-{target_minor}"
     for release in releases:
-        tag = release.get("tag_name", "")
         assets = release.get("assets", [])
-        # Check if this release has Python 3.12 install_only builds
-        has_312 = any(
-            "cpython-3.12" in a["name"] and "install_only.tar.gz" in a["name"]
+        has_target = any(
+            a["name"].startswith(prefix) and "install_only" in a["name"]
             for a in assets
         )
-        if has_312:
+        if has_target:
             return release
     
     return None
@@ -95,12 +94,40 @@ def extract_xpack_version(tag_name: str) -> str:
     return tag_name.lstrip("v")
 
 
-def extract_python_version_from_assets(assets: list[dict]) -> str | None:
-    """Extract Python version from asset names like 'cpython-3.12.6+20240909-...'."""
+def _version_tuple(version: str) -> tuple:
+    """Convert a version string to a comparable tuple of integers.
+
+    Handles formats like '3.12.6+20240909', '3.31.9-1', '15.2.1-1.1'.
+    Non-numeric parts are treated as 0.
+    """
+    # Normalise separators: treat '+', '-' as '.'
+    normalized = re.sub(r"[+\-]", ".", version)
+    parts = normalized.split(".")
+    result = []
+    for p in parts:
+        try:
+            result.append(int(p))
+        except ValueError:
+            result.append(0)
+    return tuple(result)
+
+
+def _is_downgrade(current: str, new: str) -> bool:
+    """Return True if new_version is older than current_version."""
+    return _version_tuple(new) < _version_tuple(current)
+
+
+def extract_python_version_from_assets(assets: list[dict], target_minor: str = "3.12") -> str | None:
+    """Extract Python version from asset names, filtering to the target major.minor.
+
+    e.g. for target_minor='3.12' returns '3.12.13+20260414' from assets named
+    like 'cpython-3.12.13+20260414-...'
+    """
+    prefix = f"cpython-{target_minor}."
     for asset in assets:
         m = re.search(r"cpython-(\d+\.\d+\.\d+)\+(\d+)", asset["name"])
-        if m:
-            return f"{m.group(1)}+{m.group(2)}"  # e.g., "3.12.6+20240909"
+        if m and asset["name"].startswith(prefix):
+            return f"{m.group(1)}+{m.group(2)}"
     return None
 
 
@@ -112,10 +139,12 @@ def find_xpack_asset_url(assets: list[dict], platform_suffix: str) -> str | None
     return None
 
 
-def find_python_asset_url(assets: list[dict], platform_pattern: str) -> str | None:
+def find_python_asset_url(assets: list[dict], platform_pattern: str, target_minor: str = "3.12") -> str | None:
     """Find the download URL for a python-build-standalone asset."""
+    prefix = f"cpython-{target_minor}."
     for asset in assets:
-        if platform_pattern in asset["name"] and "cpython-3.12" in asset["name"]:
+        name = asset["name"]
+        if name.startswith(prefix) and platform_pattern in name and "install_only" in name:
             return asset["browser_download_url"]
     return None
 
@@ -128,7 +157,11 @@ def check_tool_update(tool_name: str, tool_cfg: dict) -> dict | None:
     print(f"  Checking {tool_name} (current: {current_version})...")
 
     if tool_name == "python":
-        release = get_latest_python_release(repo)
+        # Determine target major.minor from the current manifest version so we
+        # never cross to a different (lower) minor series.
+        m = re.match(r"(\d+\.\d+)", current_version)
+        target_minor = m.group(1) if m else "3.12"
+        release = get_latest_python_release(repo, target_minor)
     else:
         release = get_latest_xpack_release(repo)
 
@@ -140,10 +173,9 @@ def check_tool_update(tool_name: str, tool_cfg: dict) -> dict | None:
     assets = release.get("assets", [])
 
     if tool_name == "python":
-        # For python-build-standalone, we extract version differently
-        py_version = extract_python_version_from_assets(assets)
+        py_version = extract_python_version_from_assets(assets, target_minor)
         if not py_version:
-            print(f"    Could not determine Python version from assets")
+            print(f"    Could not determine Python {target_minor}.x version from assets")
             return None
         new_version = py_version
     else:
@@ -151,6 +183,10 @@ def check_tool_update(tool_name: str, tool_cfg: dict) -> dict | None:
 
     if new_version == current_version:
         print(f"    Up to date: {current_version}")
+        return None
+
+    if _is_downgrade(current_version, new_version):
+        print(f"    Skipping downgrade: {current_version} -> {new_version}")
         return None
 
     print(f"    Update available: {current_version} -> {new_version}")
@@ -161,7 +197,7 @@ def check_tool_update(tool_name: str, tool_cfg: dict) -> dict | None:
         if tool_name == "python":
             pattern = PYTHON_PLATFORM_MAP.get(plat_key)
             if pattern:
-                url = find_python_asset_url(assets, pattern)
+                url = find_python_asset_url(assets, pattern, target_minor)
         else:
             suffixes = PLATFORM_SUFFIXES.get(plat_key, [])
             url = None

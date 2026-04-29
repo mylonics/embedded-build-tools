@@ -113,9 +113,9 @@
       }
     },
     "python": {
-      "version": "3.10.20+20260414",
+      "version": "3.12.13+20260414",
       "description": "Portable Python (python-build-standalone / xPack compatible, GDB-compatible)",
-      "repo": "indygreg/python-build-standalone",
+      "repo": "astral-sh/python-build-standalone",
       "platforms": {
         "win32-x64": {
           "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260414/cpython-3.12.13%2B20260414-x86_64-pc-windows-msvc-install_only.tar.gz",
