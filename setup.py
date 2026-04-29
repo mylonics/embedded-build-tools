@@ -435,21 +435,22 @@ def _add_to_path_unix():
 
 
 def _add_to_path_windows():
-    """Add tool bin directories to the Windows user PATH via setx."""
+    """Add tool bin directories to the Windows user PATH."""
+    # Derive bin directories from installed tools rather than a hardcoded list
+    manifest = load_manifest()
     bin_dirs = []
-    for tool_name in ["arm-none-eabi-gcc", "cmake", "ninja-build"]:
-        d = TOOLS_DIR / tool_name / "bin"
-        if d.exists():
-            bin_dirs.append(str(d))
+    for tool_name in manifest["tools"]:
+        bin_dir = TOOLS_DIR / tool_name / "bin"
+        if bin_dir.exists():
+            bin_dirs.append(str(bin_dir))
 
-    # Python on Windows lives in tools/python/python
-    python_dir = TOOLS_DIR / "python" / "python"
-    if python_dir.exists():
-        bin_dirs.append(str(python_dir))
-    else:
-        python_bin = TOOLS_DIR / "python" / "bin"
-        if python_bin.exists():
-            bin_dirs.append(str(python_bin))
+    # Python on Windows lives in tools/python/python, not tools/python/bin
+    python_special = TOOLS_DIR / "python" / "python"
+    if python_special.exists():
+        # Replace any tools/python/bin entry with the correct directory
+        python_bin = str(TOOLS_DIR / "python" / "bin")
+        bin_dirs = [d for d in bin_dirs if d != python_bin]
+        bin_dirs.append(str(python_special))
 
     if not bin_dirs:
         print("  No tool directories found. Run setup.py without --add-to-path first.")
@@ -466,18 +467,29 @@ def _add_to_path_windows():
     except (FileNotFoundError, subprocess.CalledProcessError):
         current_path = ""
 
-    existing_dirs = set(current_path.split(";")) if current_path else set()
-    new_dirs = [d for d in bin_dirs if d not in existing_dirs]
+    # Preserve existing PATH order; append only truly new entries
+    existing_dirs = current_path.split(";") if current_path else []
+    existing_set = {d.rstrip("\\") for d in existing_dirs if d}
+    new_dirs = [d for d in bin_dirs if d.rstrip("\\") not in existing_set]
 
     if not new_dirs:
         print("  Tool directories are already in your user PATH.")
         return
 
-    new_path = ";".join(list(existing_dirs) + new_dirs).strip(";")
+    new_path = ";".join(existing_dirs + new_dirs).strip(";")
+
+    # Write via a temp script to avoid quoting/injection issues with long paths
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".ps1", delete=False, encoding="utf-8") as tf:
+        ps1_path = tf.name
+        # Escape any single quotes inside the path value
+        safe_path = new_path.replace("'", "''")
+        tf.write(
+            f"[System.Environment]::SetEnvironmentVariable('PATH','{safe_path}','User')\n"
+        )
     try:
         subprocess.run(
-            ["powershell", "-Command",
-             f"[System.Environment]::SetEnvironmentVariable('PATH','{new_path}','User')"],
+            ["powershell", "-ExecutionPolicy", "Bypass", "-File", ps1_path],
             check=True,
         )
         print(f"  Added to user PATH:")
@@ -489,6 +501,8 @@ def _add_to_path_windows():
         print(f"  Add these directories to your PATH manually:", file=sys.stderr)
         for d in new_dirs:
             print(f"    {d}", file=sys.stderr)
+    finally:
+        Path(ps1_path).unlink(missing_ok=True)
 
 
 def list_tools(manifest: dict, plat: str):

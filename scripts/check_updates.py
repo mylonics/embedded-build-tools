@@ -100,7 +100,7 @@ def _version_tuple(version: str) -> tuple:
     Handles formats like '3.12.6+20240909', '3.31.9-1', '15.2.1-1.1'.
     Non-numeric parts are treated as 0.
     """
-    # Normalise separators: treat '+', '-' as '.'
+    # Normalize separators: treat '+', '-' as '.'
     normalized = re.sub(r"[+\-]", ".", version)
     parts = normalized.split(".")
     result = []
